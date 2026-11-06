@@ -1,0 +1,141 @@
+---
+# Converts pay-as-you-go (PAYG) RHEL and RHEL for SAP Marketplace VMs to Azure Hybrid Benefit
+# (licenseType RHEL_BYOS) so they are billed against the customer's Red Hat Cloud Access subscriptions.
+#
+# Prerequisites:
+#   - Customer is enrolled in Red Hat Cloud Access with enough RHEL / RHEL for SAP subscriptions.
+#   - `az login` as an identity with Reader on the scope being queried and
+#     Microsoft.Compute/virtualMachines/write on the target VMs.
+#   - `az extension add --name resource-graph`
+#
+# Usage:
+#   ansible-playbook enable_ahb.yml                                  # dry run (default)
+#   ansible-playbook enable_ahb.yml -e dry_run=false                 # apply
+#   ansible-playbook enable_ahb.yml -e management_group_id=<root-mg> # scope to a management group
+- name: Enable Azure Hybrid Benefit for PAYG RHEL and RHEL for SAP VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    dry_run: true
+    # Tenant root management group ID to cover every subscription; empty = all subscriptions the identity can see.
+    management_group_id: ""
+    # Use the same `az login` identity for the azure.azcollection modules as for the Resource Graph queries.
+    azure_auth_source: cli
+    target_license_type: RHEL_BYOS
+
+    # PAYG Marketplace images from Red Hat (RHEL, RHEL-HA, RHEL-SAP-HA, RHEL-SAP-APPS, ...).
+    # BYOS images are excluded by offer / purchase plan; VMs already on RHEL_BYOS are skipped.
+    # Power state is not filtered: the license type can be changed on stopped/deallocated VMs too.
+    payg_vm_query: >-
+      Resources
+      | where type =~ 'microsoft.compute/virtualmachines'
+      | extend imagePublisher = tostring(properties.storageProfile.imageReference.publisher),
+               imageOffer = tostring(properties.storageProfile.imageReference.offer),
+               imageSku = tostring(properties.storageProfile.imageReference.sku),
+               currentLicense = tostring(properties.licenseType),
+               powerState = tostring(properties.extended.instanceView.powerState.code)
+      | where imagePublisher =~ 'RedHat'
+      | where imageOffer !contains 'byos' and tostring(plan.product) !contains 'byos'
+      | where currentLicense !~ 'RHEL_BYOS'
+      | project id, name, resourceGroup, subscriptionId, location, imageOffer, imageSku, currentLicense, powerState
+
+    # Report only: Linux VMs that report a RHEL guest OS but weren't deployed directly from a Red Hat
+    # Marketplace image (custom or gallery images). These need manual review of how they are billed.
+    review_vm_query: >-
+      Resources
+      | where type =~ 'microsoft.compute/virtualmachines'
+      | where tostring(properties.storageProfile.imageReference.publisher) !~ 'RedHat'
+      | where tostring(properties.storageProfile.osDisk.osType) =~ 'Linux'
+      | extend osName = tolower(tostring(properties.extended.instanceView.osName)),
+               currentLicense = tostring(properties.licenseType)
+      | where osName contains 'redhat' or osName contains 'red hat' or osName contains 'rhel'
+      | project id, name, resourceGroup, subscriptionId, osName, currentLicense
+
+    # Report only: Uniform scale sets built from Red Hat images. The license type lives on the scale
+    # set model and existing instances must be upgraded to pick it up, so these are handled separately.
+    vmss_query: >-
+      Resources
+      | where type =~ 'microsoft.compute/virtualmachinescalesets'
+      | extend imagePublisher = tostring(properties.virtualMachineProfile.storageProfile.imageReference.publisher),
+               imageOffer = tostring(properties.virtualMachineProfile.storageProfile.imageReference.offer),
+               currentLicense = tostring(properties.virtualMachineProfile.licenseType)
+      | where imagePublisher =~ 'RedHat' and imageOffer !contains 'byos' and currentLicense !~ 'RHEL_BYOS'
+      | project id, name, resourceGroup, subscriptionId, imageOffer, currentLicense
+
+  tasks:
+    - name: Verify the Azure CLI is logged in
+      ansible.builtin.command: az account show -o json
+      changed_when: false
+
+    - name: Verify the resource-graph CLI extension is installed
+      ansible.builtin.command: az extension show --name resource-graph -o json
+      changed_when: false
+
+    - name: Find PAYG RHEL / RHEL for SAP VMs not yet on AHB
+      ansible.builtin.include_tasks: tasks/arg_query.yml
+      vars:
+        arg_query: "{{ payg_vm_query }}"
+        arg_result_var: target_vms
+        arg_skip_token: ""
+
+    - name: Find RHEL VMs from custom images (report only)
+      ansible.builtin.include_tasks: tasks/arg_query.yml
+      vars:
+        arg_query: "{{ review_vm_query }}"
+        arg_result_var: review_vms
+        arg_skip_token: ""
+
+    - name: Find RHEL scale sets (report only)
+      ansible.builtin.include_tasks: tasks/arg_query.yml
+      vars:
+        arg_query: "{{ vmss_query }}"
+        arg_result_var: target_vmss
+        arg_skip_token: ""
+
+    - name: Display discovered VMs
+      ansible.builtin.debug:
+        msg:
+          - "{{ 'DRY RUN - no changes will be made' if dry_run | bool else 'APPLYING CHANGES' }}"
+          - "PAYG VMs to convert to {{ target_license_type }}: {{ target_vms | length }}"
+          - "{{ target_vms | map(attribute='name') | zip(target_vms | map(attribute='imageOffer'), target_vms | map(attribute='powerState'))
+                | map('join', ' | ') | list }}"
+
+    - name: Update VM license type to {{ target_license_type }}
+      azure.azcollection.azure_rm_resource:
+        auth_source: "{{ azure_auth_source }}"
+        subscription_id: "{{ item.subscriptionId }}"
+        resource_group: "{{ item.resourceGroup }}"
+        provider: Microsoft.Compute
+        resource_type: virtualMachines
+        resource_name: "{{ item.name }}"
+        api_version: "2024-07-01"
+        method: PATCH
+        body:
+          properties:
+            licenseType: "{{ target_license_type }}"
+      loop: "{{ target_vms }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.resourceGroup }}, sub {{ item.subscriptionId }})"
+      register: patch_results
+      ignore_errors: true
+      when: not dry_run | bool
+
+    - name: Summarize results
+      vars:
+        failed_items: "{{ patch_results.results | default([]) | select('failed') | list }}"
+        converted_items: "{{ patch_results.results | default([]) | reject('failed') | reject('skipped') | list }}"
+      block:
+        - name: Report summary
+          ansible.builtin.debug:
+            msg:
+              - "Converted to {{ target_license_type }}: {{ converted_items | length }} of {{ target_vms | length }}"
+              - "Failed: {{ failed_items | map(attribute='item.name') | list }}"
+              - "Needs manual review (RHEL from custom/gallery image): {{ review_vms | map(attribute='name') | list }}"
+              - "Scale sets not modified: {{ target_vmss | map(attribute='name') | list }}"
+
+        - name: Fail if any VM could not be converted
+          ansible.builtin.fail:
+            msg: "{{ failed_items | length }} VM(s) failed to convert; see errors above."
+          when: failed_items | length > 0
