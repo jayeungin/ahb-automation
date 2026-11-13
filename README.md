@@ -1,7 +1,7 @@
 # Azure Hybrid Benefit for RHEL – automation
 
-Ansible collection (`jayeungin.azure_ahb`) that switches pay-as-you-go (PAYG) **RHEL** and **RHEL for SAP** Marketplace VMs in a
-customer's Azure environment to Azure Hybrid Benefit (`licenseType: RHEL_BYOS`). After conversion the VMs are
+Ansible collection (`jayeungin.azure_ahb`) that switches pay-as-you-go (PAYG) **RHEL** and **RHEL for SAP**
+Marketplace VMs in a customer's Azure environment to Azure Hybrid Benefit (`licenseType: RHEL_BYOS`). After conversion the VMs are
 billed against the customer's Red Hat Cloud Access subscriptions instead of Azure's PAYG RHEL rate.
 
 The playbook runs a **dry run by default**. It changes customer billing, so nothing is modified unless you pass
@@ -114,7 +114,8 @@ To use the role from your own playbook instead:
 ### Service principal instead of `az login`
 
 Set `enable_ahb_auth_source=env` and export the standard `azure.azcollection` variables
-(`AZURE_CLIENT_ID`, `AZURE_SECRET`, `AZURE_TENANT`, `AZURE_SUBSCRIPTION_ID`). Nothing else changes.
+(`AZURE_CLIENT_ID`, `AZURE_SECRET`, `AZURE_TENANT`, `AZURE_SUBSCRIPTION_ID`). The service principal needs the
+same Azure permissions listed above. Nothing else changes.
 
 ## Variables
 
@@ -128,7 +129,16 @@ Set `enable_ahb_auth_source=env` and export the standard `azure.azcollection` va
 
 ## Output
 
-The run ends with a summary like this:
+The run ends with a summary. A dry run looks like this:
+
+```
+Dry run - would convert to RHEL_BYOS: 42
+Failed: []
+Needs manual review (RHEL from custom/gallery image): ['rhel-golden-01']
+Scale sets not modified: ['sap-web-vmss']
+```
+
+After applying changes, the first line reports what was actually converted:
 
 ```
 Converted to RHEL_BYOS: 41 of 42
@@ -143,7 +153,9 @@ If any VM fails, the play exits non-zero after the summary. Errors for each VM a
 ## Recommended rollout
 
 1. Run the dry run against the customer tenant and check the VM list against what you expect.
-2. Convert a small test set first, including at least one deallocated VM.
+2. Convert a small test set first, including at least one deallocated VM. The playbook has no per-VM filter,
+   so do this by pointing `enable_ahb_management_group_id` at a management group that contains only a test
+   subscription, or by logging in as an identity that can only see the test subscription.
 3. Run the full conversion.
 4. Handle the report-only VMs and scale sets separately.
 
