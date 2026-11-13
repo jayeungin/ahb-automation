@@ -1,0 +1,12 @@
+---
+# Converts pay-as-you-go (PAYG) RHEL and RHEL for SAP Marketplace VMs to Azure Hybrid Benefit
+# (licenseType RHEL_BYOS). Dry run by default; see the collection README for usage.
+#
+#   ansible-playbook jayeungin.azure_ahb.enable_ahb                                   # dry run
+#   ansible-playbook jayeungin.azure_ahb.enable_ahb -e enable_ahb_dry_run=false       # apply
+- name: Enable Azure Hybrid Benefit for PAYG RHEL and RHEL for SAP VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: jayeungin.azure_ahb.enable_ahb

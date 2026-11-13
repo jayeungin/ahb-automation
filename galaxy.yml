@@ -1,0 +1,23 @@
+---
+namespace: jayeungin
+name: azure_ahb
+version: 1.0.0
+readme: README.md
+authors:
+  - jayeungin
+description: Convert PAYG RHEL and RHEL for SAP Azure Marketplace VMs to Azure Hybrid Benefit (RHEL_BYOS).
+license:
+  - GPL-3.0-or-later
+tags:
+  - azure
+  - rhel
+  - cloud
+  - licensing
+dependencies:
+  azure.azcollection: ">=2.0.0"
+repository: https://github.com/jayeungin/ahb-automation
+issues: https://github.com/jayeungin/ahb-automation/issues
+build_ignore:
+  - .git
+  - .gitignore
+  - "*.tar.gz"

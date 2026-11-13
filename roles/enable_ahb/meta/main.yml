@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: jayeungin
+  description: Convert PAYG RHEL and RHEL for SAP Azure VMs to Azure Hybrid Benefit (RHEL_BYOS).
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms: []
+  galaxy_tags:
+    - azure
+    - rhel
+dependencies: []

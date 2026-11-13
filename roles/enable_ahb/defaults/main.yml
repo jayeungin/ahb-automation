@@ -1,0 +1,10 @@
+---
+# When true, discover and report only. Set to false to apply changes.
+enable_ahb_dry_run: true
+# Tenant root management group ID to cover every subscription; empty = all subscriptions the identity can see.
+enable_ahb_management_group_id: ""
+# How azure.azcollection authenticates. 'cli' reuses your `az login`.
+enable_ahb_auth_source: cli
+enable_ahb_target_license_type: RHEL_BYOS
+# Rows per Resource Graph page (service maximum is 1000).
+enable_ahb_arg_page_size: 1000

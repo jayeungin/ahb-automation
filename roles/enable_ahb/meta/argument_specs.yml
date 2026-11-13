@@ -1,0 +1,26 @@
+---
+argument_specs:
+  main:
+    short_description: Convert PAYG RHEL / RHEL for SAP Azure VMs to Azure Hybrid Benefit.
+    options:
+      enable_ahb_dry_run:
+        type: bool
+        default: true
+        description: Discover and report only. Set to false to change license types.
+      enable_ahb_management_group_id:
+        type: str
+        default: ""
+        description: Management group to search. Empty searches every subscription the identity can see.
+      enable_ahb_auth_source:
+        type: str
+        default: cli
+        choices: [auto, cli, credential_file, env, msi]
+        description: How azure.azcollection authenticates. C(cli) reuses your C(az login).
+      enable_ahb_target_license_type:
+        type: str
+        default: RHEL_BYOS
+        description: License type applied to the target VMs.
+      enable_ahb_arg_page_size:
+        type: int
+        default: 1000
+        description: Rows per Resource Graph page (maximum 1000).

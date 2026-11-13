@@ -1,0 +1,47 @@
+---
+# Changes are only made when dry run is off and the play is not running with --check.
+enable_ahb_apply: "{{ not (enable_ahb_dry_run | bool) and not ansible_check_mode }}"
+
+# Resource Graph REST API used for discovery.
+enable_ahb_arg_api_version: "2022-10-01"
+# Compute API used to PATCH the VM license type.
+enable_ahb_compute_api_version: "2024-07-01"
+
+# PAYG Marketplace images from Red Hat (RHEL, RHEL-HA, RHEL-SAP-HA, RHEL-SAP-APPS, ...).
+# BYOS images are excluded by offer / purchase plan; VMs already on RHEL_BYOS are skipped.
+# Power state is not filtered: the license type can be changed on stopped/deallocated VMs too.
+enable_ahb_payg_vm_query: >-
+  Resources
+  | where type =~ 'microsoft.compute/virtualmachines'
+  | extend imagePublisher = tostring(properties.storageProfile.imageReference.publisher),
+           imageOffer = tostring(properties.storageProfile.imageReference.offer),
+           imageSku = tostring(properties.storageProfile.imageReference.sku),
+           currentLicense = tostring(properties.licenseType),
+           powerState = tostring(properties.extended.instanceView.powerState.code)
+  | where imagePublisher =~ 'RedHat'
+  | where imageOffer !contains 'byos' and tostring(plan.product) !contains 'byos'
+  | where currentLicense !~ 'RHEL_BYOS'
+  | project id, name, resourceGroup, subscriptionId, location, imageOffer, imageSku, currentLicense, powerState
+
+# Report only: Linux VMs that report a RHEL guest OS but weren't deployed directly from a Red Hat
+# Marketplace image (custom or gallery images). These need manual review of how they are billed.
+enable_ahb_review_vm_query: >-
+  Resources
+  | where type =~ 'microsoft.compute/virtualmachines'
+  | where tostring(properties.storageProfile.imageReference.publisher) !~ 'RedHat'
+  | where tostring(properties.storageProfile.osDisk.osType) =~ 'Linux'
+  | extend osName = tolower(tostring(properties.extended.instanceView.osName)),
+           currentLicense = tostring(properties.licenseType)
+  | where osName contains 'redhat' or osName contains 'red hat' or osName contains 'rhel'
+  | project id, name, resourceGroup, subscriptionId, osName, currentLicense
+
+# Report only: Uniform scale sets built from Red Hat images. The license type lives on the scale
+# set model and existing instances must be upgraded to pick it up, so these are handled separately.
+enable_ahb_vmss_query: >-
+  Resources
+  | where type =~ 'microsoft.compute/virtualmachinescalesets'
+  | extend imagePublisher = tostring(properties.virtualMachineProfile.storageProfile.imageReference.publisher),
+           imageOffer = tostring(properties.virtualMachineProfile.storageProfile.imageReference.offer),
+           currentLicense = tostring(properties.virtualMachineProfile.licenseType)
+  | where imagePublisher =~ 'RedHat' and imageOffer !contains 'byos' and currentLicense !~ 'RHEL_BYOS'
+  | project id, name, resourceGroup, subscriptionId, imageOffer, currentLicense

@@ -1,0 +1,78 @@
+---
+- name: Reset discovery results
+  ansible.builtin.set_fact:
+    enable_ahb_target_vms: []
+    enable_ahb_review_vms: []
+    enable_ahb_target_vmss: []
+
+- name: Find PAYG RHEL / RHEL for SAP VMs not yet on AHB
+  ansible.builtin.include_tasks: arg_query.yml
+  vars:
+    enable_ahb_arg_query: "{{ enable_ahb_payg_vm_query }}"
+    enable_ahb_arg_result_var: enable_ahb_target_vms
+    enable_ahb_arg_skip_token: ""
+
+- name: Find RHEL VMs from custom images (report only)
+  ansible.builtin.include_tasks: arg_query.yml
+  vars:
+    enable_ahb_arg_query: "{{ enable_ahb_review_vm_query }}"
+    enable_ahb_arg_result_var: enable_ahb_review_vms
+    enable_ahb_arg_skip_token: ""
+
+- name: Find RHEL scale sets (report only)
+  ansible.builtin.include_tasks: arg_query.yml
+  vars:
+    enable_ahb_arg_query: "{{ enable_ahb_vmss_query }}"
+    enable_ahb_arg_result_var: enable_ahb_target_vmss
+    enable_ahb_arg_skip_token: ""
+
+- name: Display discovered VMs
+  ansible.builtin.debug:
+    msg:
+      - "{{ 'APPLYING CHANGES' if enable_ahb_apply else 'DRY RUN - no changes will be made' }}"
+      - "PAYG VMs to convert to {{ enable_ahb_target_license_type }}: {{ enable_ahb_target_vms | length }}"
+      - "{{ enable_ahb_target_vms | map(attribute='name')
+            | zip(enable_ahb_target_vms | map(attribute='imageOffer'), enable_ahb_target_vms | map(attribute='powerState'))
+            | map('join', ' | ') | list }}"
+
+- name: Update VM license type to {{ enable_ahb_target_license_type }}
+  azure.azcollection.azure_rm_resource:
+    auth_source: "{{ enable_ahb_auth_source }}"
+    subscription_id: "{{ item.subscriptionId }}"
+    resource_group: "{{ item.resourceGroup }}"
+    provider: Microsoft.Compute
+    resource_type: virtualMachines
+    resource_name: "{{ item.name }}"
+    api_version: "{{ enable_ahb_compute_api_version }}"
+    method: PATCH
+    # GET the VM first and only PATCH if licenseType differs, so 'changed' is accurate on re-runs.
+    idempotency: true
+    body:
+      properties:
+        licenseType: "{{ enable_ahb_target_license_type }}"
+  loop: "{{ enable_ahb_target_vms }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.resourceGroup }}, sub {{ item.subscriptionId }})"
+  register: enable_ahb_patch_results
+  ignore_errors: true
+  when: enable_ahb_apply
+
+- name: Summarize results
+  vars:
+    enable_ahb_failed_items: "{{ enable_ahb_patch_results.results | default([]) | select('failed') | list }}"
+    enable_ahb_converted_items: "{{ enable_ahb_patch_results.results | default([]) | reject('failed') | reject('skipped') | list }}"
+  block:
+    - name: Report summary
+      ansible.builtin.debug:
+        msg:
+          - "{{ ('Converted to ' ~ enable_ahb_target_license_type ~ ': ' ~ enable_ahb_converted_items | length ~ ' of ' ~ enable_ahb_target_vms | length)
+                if enable_ahb_apply else
+                ('Dry run - would convert to ' ~ enable_ahb_target_license_type ~ ': ' ~ enable_ahb_target_vms | length) }}"
+          - "Failed: {{ enable_ahb_failed_items | map(attribute='item.name') | list }}"
+          - "Needs manual review (RHEL from custom/gallery image): {{ enable_ahb_review_vms | map(attribute='name') | list }}"
+          - "Scale sets not modified: {{ enable_ahb_target_vmss | map(attribute='name') | list }}"
+
+    - name: Fail if any VM could not be converted
+      ansible.builtin.fail:
+        msg: "{{ enable_ahb_failed_items | length }} VM(s) failed to convert; see errors above."
+      when: enable_ahb_failed_items | length > 0

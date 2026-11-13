@@ -1,0 +1,35 @@
+---
+# Runs an Azure Resource Graph query through the REST API one page at a time, recursing until every
+# page is fetched.
+# Inputs:
+#   enable_ahb_arg_query       - KQL query (must project the 'id' column, required by ARG paging)
+#   enable_ahb_arg_result_var  - name of the fact to append results to
+#   enable_ahb_arg_skip_token  - paging token; pass '' on the first call
+- name: "Query Azure Resource Graph ({{ enable_ahb_arg_result_var }})"
+  azure.azcollection.azure_rm_resource:
+    auth_source: "{{ enable_ahb_auth_source }}"
+    url: /providers/Microsoft.ResourceGraph/resources
+    api_version: "{{ enable_ahb_arg_api_version }}"
+    method: POST
+    # No scope given means tenant scope: every subscription the identity can see.
+    body: >-
+      {{ {'query': enable_ahb_arg_query,
+          'options': {'$top': enable_ahb_arg_page_size | int, 'resultFormat': 'objectArray'}
+                     | combine({'$skipToken': enable_ahb_arg_skip_token} if enable_ahb_arg_skip_token | default('') else {})}
+         | combine({'managementGroups': [enable_ahb_management_group_id]} if enable_ahb_management_group_id else {}) }}
+  register: enable_ahb_arg_page
+  changed_when: false
+  # Read-only query. azure_rm_resource doesn't support check mode, so without this it would be
+  # skipped under --check and discovery would return nothing.
+  check_mode: false
+
+- name: "Accumulate results ({{ enable_ahb_arg_result_var }})"
+  ansible.builtin.set_fact:
+    "{{ enable_ahb_arg_result_var }}": "{{ (vars[enable_ahb_arg_result_var] | default([])) + enable_ahb_arg_page.response.data }}"
+    enable_ahb_arg_next_token: "{{ enable_ahb_arg_page.response['$skipToken'] | default('', true) }}"
+
+- name: "Fetch next page ({{ enable_ahb_arg_result_var }})"
+  ansible.builtin.include_tasks: arg_query.yml
+  vars:
+    enable_ahb_arg_skip_token: "{{ enable_ahb_arg_next_token }}"
+  when: enable_ahb_arg_next_token | length > 0
